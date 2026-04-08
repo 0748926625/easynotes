@@ -20,12 +20,14 @@ export default function VoiceInput({ students, session, voiceMap = {}, onUpdate,
     students.map((s) => ({ ...s, notes: new Array(noteTypes.length).fill(null) }))
   );
 
-  const studentIndexRef  = useRef(0);
-  const noteIndexRef     = useRef(0);
-  const pausedRef        = useRef(false);
-  const localStudentsRef = useRef(localStudents);
-  const synthRef         = useRef(window.speechSynthesis);
-  const announceRef      = useRef(null);
+  const studentIndexRef   = useRef(0);
+  const noteIndexRef      = useRef(0);
+  const pausedRef         = useRef(false);
+  const localStudentsRef  = useRef(localStudents);
+  const synthRef          = useRef(window.speechSynthesis);
+  const announceRef       = useRef(null);
+  const listenForNoteRef  = useRef(null);
+  const listenForNameRef  = useRef(null);
 
   const { startRecording, stopRecording } = useWhisper();
 
@@ -46,9 +48,22 @@ export default function VoiceInput({ students, session, voiceMap = {}, onUpdate,
     synthRef.current.speak(utt);
   }, []);
 
-  // ── Enregistrement automatique ────────────────────────────────────────────────
+  // ── Enregistrement automatique ─────────────────────────────────────────────
+  // On passe par des refs pour éviter les closures figées entre listenForNote
+  // et listenForName (qui s'appellent mutuellement via handleNoteTranscript /
+  // handleNameTranscript).
 
-  const listenForNote = useCallback(() => {
+  const listenForNote = useCallback(
+    () => listenForNoteRef.current?.(),
+    []
+  );
+  const listenForName = useCallback(
+    () => listenForNameRef.current?.(),
+    []
+  );
+
+  // Implémentations réelles — mises à jour chaque render via la ref
+  listenForNoteRef.current = () => {
     if (pausedRef.current) return;
     beep.start();
     setPhase("recording");
@@ -62,18 +77,18 @@ export default function VoiceInput({ students, session, voiceMap = {}, onUpdate,
       },
       (err) => {
         if (err === "no-speech") {
-          if (!pausedRef.current) listenForNote();
+          if (!pausedRef.current) listenForNoteRef.current?.();
           return;
         }
         beep.error();
         setPhase("error");
         setTranscript("Non reconnu");
-        setTimeout(() => { if (!pausedRef.current) listenForNote(); }, 800);
+        setTimeout(() => { if (!pausedRef.current) listenForNoteRef.current?.(); }, 800);
       }
     );
-  }, [startRecording]);
+  };
 
-  const listenForName = useCallback(() => {
+  listenForNameRef.current = () => {
     if (pausedRef.current) return;
     beep.start();
     setPhase("recording");
@@ -87,16 +102,16 @@ export default function VoiceInput({ students, session, voiceMap = {}, onUpdate,
       },
       (err) => {
         if (err === "no-speech") {
-          if (!pausedRef.current) listenForName();
+          if (!pausedRef.current) listenForNameRef.current?.();
           return;
         }
         beep.error();
         setPhase("error");
         setTranscript("Non reconnu");
-        setTimeout(() => { if (!pausedRef.current) listenForName(); }, 800);
+        setTimeout(() => { if (!pausedRef.current) listenForNameRef.current?.(); }, 800);
       }
     );
-  }, [startRecording]);
+  };
 
   // ── Annonce + démarrage ───────────────────────────────────────────────────────
 
@@ -107,7 +122,7 @@ export default function VoiceInput({ students, session, voiceMap = {}, onUpdate,
     let text = `${student.nom} ${student.prenom}`;
     if (mode === "simple" && noteTypes.length > 1) text += `, note ${nIdx + 1}`;
     setPhase("speaking");
-    speak(text, () => { if (!pausedRef.current) listenForNote(); });
+    speak(text, () => { if (!pausedRef.current) listenForNoteRef.current?.(); });
   }, [mode, noteTypes, speak, listenForNote]);
 
   announceRef.current = announceStudent;
@@ -116,7 +131,7 @@ export default function VoiceInput({ students, session, voiceMap = {}, onUpdate,
     if (!started) return;
     if (mode === "inverse") {
       setInverseStep("name");
-      listenForName();
+      listenForNameRef.current?.();
     } else {
       const t = setTimeout(() => announceRef.current(0, 0), 300);
       return () => clearTimeout(t);
@@ -131,7 +146,7 @@ export default function VoiceInput({ students, session, voiceMap = {}, onUpdate,
       beep.error();
       setPhase("error");
       setTranscript(`"${raw}" — élève non trouvé`);
-      setTimeout(() => { if (!pausedRef.current) listenForName(); }, 1200);
+      setTimeout(() => { if (!pausedRef.current) listenForNameRef.current?.(); }, 1200);
       return;
     }
     studentIndexRef.current = idx;
@@ -143,7 +158,7 @@ export default function VoiceInput({ students, session, voiceMap = {}, onUpdate,
       setPhase("error");
       const s = localStudentsRef.current[idx];
       setTranscript(`${s.prenom} ${s.nom} — déjà complet`);
-      setTimeout(() => { if (!pausedRef.current) listenForName(); }, 1500);
+      setTimeout(() => { if (!pausedRef.current) listenForNameRef.current?.(); }, 1500);
       return;
     }
     noteIndexRef.current = nIdx;
@@ -154,7 +169,7 @@ export default function VoiceInput({ students, session, voiceMap = {}, onUpdate,
     const label = noteTypes.length > 1 ? `, note ${nIdx + 1}` : "";
     setPhase("speaking");
     speak(`${s.prenom} ${s.nom}${label}`, () => {
-      if (!pausedRef.current) listenForNote();
+      if (!pausedRef.current) listenForNoteRef.current?.();
     });
   }
 
@@ -172,7 +187,7 @@ export default function VoiceInput({ students, session, voiceMap = {}, onUpdate,
         beep.error();
         setPhase("error");
         setTranscript(`"${alternatives[0].transcript}" — non reconnu`);
-        setTimeout(() => { if (!pausedRef.current) listenForNote(); }, 800);
+        setTimeout(() => { if (!pausedRef.current) listenForNoteRef.current?.(); }, 800);
         return;
       }
 
@@ -185,7 +200,6 @@ export default function VoiceInput({ students, session, voiceMap = {}, onUpdate,
           if (pausedRef.current) return;
 
           if (mode === "inverse") {
-            // Vérifier s'il reste des notes pour cet élève
             const notes    = localStudentsRef.current[sIdx].notes;
             const nextNIdx = notes.findIndex(n => n === null);
             if (nextNIdx !== -1 && noteTypes.length > 1) {
@@ -193,12 +207,11 @@ export default function VoiceInput({ students, session, voiceMap = {}, onUpdate,
               setNoteIndex(nextNIdx);
               setPhase("speaking");
               speak(`Note ${nextNIdx + 1}`, () => {
-                if (!pausedRef.current) listenForNote();
+                if (!pausedRef.current) listenForNoteRef.current?.();
               });
             } else {
-              // Retour à la saisie du nom
               setInverseStep("name");
-              listenForName();
+              listenForNameRef.current?.();
             }
           } else {
             // Mode simple : avancer séquentiellement
@@ -227,7 +240,7 @@ export default function VoiceInput({ students, session, voiceMap = {}, onUpdate,
         beep.error();
         setPhase("error");
         setTranscript(`"${alternatives[0].transcript}" — non reconnu`);
-        setTimeout(() => { if (!pausedRef.current) listenForNote(); }, 800);
+        setTimeout(() => { if (!pausedRef.current) listenForNoteRef.current?.(); }, 800);
         return;
       }
 
@@ -291,7 +304,7 @@ export default function VoiceInput({ students, session, voiceMap = {}, onUpdate,
     if (paused) {
       pausedRef.current = false;
       setPaused(false);
-      if (mode === "inverse" && inverseStep === "name") listenForName();
+      if (mode === "inverse" && inverseStep === "name") listenForNameRef.current?.();
       else announceRef.current(studentIndexRef.current, noteIndexRef.current);
     } else {
       pausedRef.current = true;
@@ -307,7 +320,7 @@ export default function VoiceInput({ students, session, voiceMap = {}, onUpdate,
     stopRecording();
     if (mode === "inverse") {
       setInverseStep("name");
-      setTimeout(() => { if (!pausedRef.current) listenForName(); }, 200);
+      setTimeout(() => { if (!pausedRef.current) listenForNameRef.current?.(); }, 200);
       return;
     }
     const nextIdx = studentIndexRef.current + 1;
@@ -321,7 +334,7 @@ export default function VoiceInput({ students, session, voiceMap = {}, onUpdate,
     synthRef.current.cancel();
     stopRecording();
     if (mode === "inverse" && inverseStep === "name") {
-      setTimeout(() => { if (!pausedRef.current) listenForName(); }, 200);
+      setTimeout(() => { if (!pausedRef.current) listenForNameRef.current?.(); }, 200);
     } else {
       setTimeout(() => { if (!pausedRef.current) announceRef.current(studentIndexRef.current, noteIndexRef.current); }, 200);
     }
